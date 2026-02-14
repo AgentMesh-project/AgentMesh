@@ -204,6 +204,8 @@ esf:
 
 ## API Reference
 
+(version = "0.1.0")
+
 ### SRRCache
 
 ```python
