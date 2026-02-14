@@ -1,3 +1,6 @@
 [submodule "agentmesh/mechanisms/tsd/LMCache"]
 	path = agentmesh/mechanisms/tsd/LMCache
 	url = https://github.com/LMCache/LMCache.git
+[submodule "agentmesh/mechanisms/tsd/epic"]
+	path = agentmesh/mechanisms/tsd/epic
+	url = https://github.com/DerekHJH/epic.git
