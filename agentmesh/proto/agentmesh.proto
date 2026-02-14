@@ -1,0 +1,356 @@
+// AgentMesh gRPC Protocol Definitions
+//
+// Defines the bi-directional gRPC streaming protocol for the
+// sidecar architecture:
+// - Agent Sidecar <-> Agent (SRR semantic caching)
+// - LLM Sidecar <-> LLM Service (TDA parallel prefill)
+// - Tool Sidecar <-> Tool Service (ESF microbatch streaming)
+
+syntax = "proto3";
+
+package agentmesh;
+
+option go_package = "github.com/AgentMesh-project/AgentMesh/proto";
+
+// ============================================================================
+// Common Messages
+// ============================================================================
+
+// Metadata attached to all messages
+message Metadata {
+    string request_id = 1;
+    string agent_id = 2;
+    string session_id = 3;
+    int64 timestamp_ms = 4;
+    map<string, string> extra = 5;
+}
+
+// Token information for KV cache management
+message TokenInfo {
+    repeated int32 token_ids = 1;
+    int32 position_start = 2;
+    int32 position_end = 3;
+    string segment_id = 4;
+}
+
+// ============================================================================
+// Agent Service (Agent <-> Agent Sidecar)
+// ============================================================================
+
+service AgentService {
+    // Send a message from one agent to another
+    rpc SendMessage(AgentMessage) returns (AgentMessageResponse);
+    
+    // Stream messages between agents
+    rpc StreamMessages(stream AgentMessage) returns (stream AgentMessage);
+    
+    // Register an agent with the mesh
+    rpc Register(RegisterRequest) returns (RegisterResponse);
+}
+
+message AgentMessage {
+    Metadata metadata = 1;
+    string sender_agent_id = 2;
+    string receiver_agent_id = 3;
+    string content = 4;
+    MessageType type = 5;
+    
+    enum MessageType {
+        TEXT = 0;
+        TOOL_CALL = 1;
+        TOOL_RESULT = 2;
+        SYSTEM = 3;
+    }
+}
+
+message AgentMessageResponse {
+    bool success = 1;
+    string error_message = 2;
+    Metadata metadata = 3;
+}
+
+message RegisterRequest {
+    string agent_id = 1;
+    string agent_type = 2;  // "supervisor", "worker", etc.
+    repeated string capabilities = 3;
+    map<string, string> config = 4;
+}
+
+message RegisterResponse {
+    bool success = 1;
+    string assigned_id = 2;
+    string error_message = 3;
+}
+
+// ============================================================================
+// LLM Service (LLM Sidecar <-> LLM Backend)
+// ============================================================================
+
+service LLMService {
+    // Process a single LLM request
+    rpc ProcessRequest(LLMRequest) returns (LLMResponse);
+    
+    // Stream LLM response (for ESF adaptive chunking)
+    rpc StreamRequest(LLMRequest) returns (stream LLMChunk);
+    
+    // Batch process multiple requests (for TSD parallel processing)
+    rpc BatchProcess(BatchLLMRequest) returns (BatchLLMResponse);
+    
+    // Prefill KV cache for a segment
+    rpc Prefill(PrefillRequest) returns (PrefillResponse);
+}
+
+message LLMRequest {
+    Metadata metadata = 1;
+    string prompt = 2;
+    repeated Message messages = 3;
+    LLMConfig config = 4;
+    
+    // TSD: KV cache segment information
+    TokenInfo token_info = 5;
+    repeated string depends_on_segments = 6;
+    
+    // SRR: Residual tokens (if cache hit)
+    bool is_residual = 7;
+    repeated int32 residual_token_ids = 8;
+}
+
+message Message {
+    string role = 1;  // "system", "user", "assistant"
+    string content = 2;
+}
+
+message LLMConfig {
+    string model = 1;
+    int32 max_tokens = 2;
+    float temperature = 3;
+    float top_p = 4;
+    int32 chunk_size = 5;  // ESF microbatch size
+}
+
+message LLMResponse {
+    Metadata metadata = 1;
+    string content = 2;
+    int32 tokens_generated = 3;
+    int32 prompt_tokens = 4;
+    float latency_ms = 5;
+    
+    // SRR: Cache information
+    bool cache_hit = 6;
+    float similarity_score = 7;
+    
+    // TSD: Segment information
+    string segment_id = 8;
+}
+
+message LLMChunk {
+    Metadata metadata = 1;
+    string content = 2;
+    int32 chunk_index = 3;
+    int32 tokens = 4;
+    bool is_final = 5;
+    
+    // ESF: Timing information for controller
+    float producer_time_ms = 6;
+    int32 chunk_size = 7;  // Size of this microbatch
+    int32 next_chunk_size = 8;  // Recommended size for next microbatch
+}
+
+message BatchLLMRequest {
+    Metadata metadata = 1;
+    repeated LLMRequest requests = 2;
+    
+    // TSD: Attention mask for parallel processing
+    bytes attention_mask = 3;  // Serialized tensor
+    bool enable_parallel = 4;
+}
+
+message BatchLLMResponse {
+    Metadata metadata = 1;
+    repeated LLMResponse responses = 2;
+    float total_latency_ms = 3;
+    int32 parallel_degree = 4;
+}
+
+message PrefillRequest {
+    Metadata metadata = 1;
+    string segment_id = 2;
+    TokenInfo token_info = 3;
+    repeated string parent_segments = 4;
+}
+
+message PrefillResponse {
+    bool success = 1;
+    string segment_id = 2;
+    int32 tokens_cached = 3;
+    float latency_ms = 4;
+}
+
+// ============================================================================
+// Tool Service (Tool Sidecar <-> External Tools)
+// ============================================================================
+
+service ToolService {
+    // Execute a tool
+    rpc Execute(ToolExecuteRequest) returns (ToolExecuteResponse);
+    
+    // Stream tool execution (for long-running tools)
+    rpc StreamExecute(ToolExecuteRequest) returns (stream ToolExecuteChunk);
+    
+    // List available tools
+    rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+    
+    // Register a new tool
+    rpc RegisterTool(RegisterToolRequest) returns (RegisterToolResponse);
+}
+
+message ToolParameter {
+    string name = 1;
+    string type = 2;  // "string", "int", "float", "bool", "json"
+    string description = 3;
+    bool required = 4;
+    string default_value = 5;
+}
+
+message ToolInfo {
+    string tool_id = 1;
+    string name = 2;
+    string description = 3;
+    repeated ToolParameter parameters = 4;
+    string category = 5;  // "search", "compute", "io", etc.
+}
+
+message ToolExecuteRequest {
+    Metadata metadata = 1;
+    string tool_id = 2;
+    map<string, string> arguments = 3;
+    int32 timeout_ms = 4;
+}
+
+message ToolExecuteResponse {
+    Metadata metadata = 1;
+    bool success = 2;
+    string result = 3;
+    string error_message = 4;
+    float latency_ms = 5;
+}
+
+message ToolExecuteChunk {
+    Metadata metadata = 1;
+    string partial_result = 2;
+    int32 chunk_index = 3;
+    bool is_final = 4;
+    float progress = 5;  // 0.0 to 1.0
+}
+
+message ListToolsRequest {
+    string category_filter = 1;
+    int32 limit = 2;
+}
+
+message ListToolsResponse {
+    repeated ToolInfo tools = 1;
+}
+
+message RegisterToolRequest {
+    ToolInfo tool_info = 1;
+    string endpoint = 2;  // gRPC or HTTP endpoint
+}
+
+message RegisterToolResponse {
+    bool success = 1;
+    string tool_id = 2;
+    string error_message = 3;
+}
+
+// ============================================================================
+// ESF Controller Messages
+// ============================================================================
+
+// Observation data for ESF sensitivity estimation (OSE)
+message ESFObservation {
+    int32 chunk_size = 1;  // θ_i (microbatch size)
+    float producer_time_ms = 2;  // T_{p,i} + T_{n,i}
+    float consumer_time_ms = 3;  // T_{c,i}
+    float slack_time_ms = 4;  // δ_i (stall time)
+    int64 timestamp_ms = 5;
+    int32 step = 6;
+}
+
+// Sensitivity estimates (OSE output)
+message ESFSensitivity {
+    float s_pro = 1;  // S_{pro,i} — producer sensitivity
+    float s_con = 2;  // S_{con,i} — consumer sensitivity
+    float rho = 3;    // ρ_i = S_{pro,i} - S_{con,i-1}
+}
+
+// ESF control update
+message ESFUpdate {
+    int32 current_theta = 1;
+    int32 recommended_theta = 2;
+    ESFSensitivity sensitivity = 3;
+    string bound_type = 4;  // "producer_bound", "consumer_bound", "balanced"
+}
+
+// ============================================================================
+// SRR Cache Messages
+// ============================================================================
+
+// Cache lookup request
+message CacheLookupRequest {
+    Metadata metadata = 1;
+    string query = 2;
+    float confidence_threshold = 3;  // τ (default 0.7)
+}
+
+// Cache lookup response
+message CacheLookupResponse {
+    bool hit = 1;
+    string cached_query = 2;
+    string cached_response = 3;
+    float projection_intensity = 4;  // s_max
+    repeated string hotspot_tokens = 5;
+    string reformulated_query = 6;
+    int32 reuse_count = 7;
+    int32 residual_count = 8;
+}
+
+// Cache store request
+message CacheStoreRequest {
+    Metadata metadata = 1;
+    string query = 2;
+    string response = 3;
+    bytes embedding = 4;  // Serialized embedding vector
+}
+
+// ============================================================================
+// TSD Segment Messages (supervisor-worker topology)
+// ============================================================================
+
+// Worker output for TDA parallel prefill
+message TSDWorkerOutput {
+    string worker_id = 1;
+    repeated int32 token_ids = 2;
+    int64 arrival_time_ms = 3;
+    int32 length = 4;
+}
+
+// Supervisor context for TDA
+message TSDSupervisorContext {
+    repeated int32 token_ids = 1;
+    int32 length = 2;
+}
+
+// Attention mask for TDA inter-worker masking
+message TDAAttentionMask {
+    int32 prefix_len = 1;
+    int32 worker_len = 2;
+    bytes mask_data = 3;  // Serialized boolean tensor
+}
+
+// TDA result after KV stitching + RoPE realignment
+message TDAResult {
+    repeated string worker_order = 1;
+    int32 total_tokens = 2;
+    float realignment_time_ms = 3;
+}
