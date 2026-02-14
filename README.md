@@ -127,7 +127,7 @@ python -m agentmesh.examples.deep_research \
 
 ## Evaluation
 
-### Reproducing Paper Results
+### Ablation Study
 
 ```bash
 # Individual mechanism benchmarks
