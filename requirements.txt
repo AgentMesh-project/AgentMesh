@@ -1,0 +1,17 @@
+# AgentMesh runtime dependencies.
+#
+# These are the lightweight, always-required dependencies. The heavier
+# components — torch, sentence-transformers, faiss, autogen, and vllm — are
+# OPTIONAL extras and are imported lazily by the code that needs them.
+# Install them via the optional-dependency groups in pyproject.toml, e.g.:
+#     pip install "agentmesh[vllm]"      # GPU KV connector / BPP backend
+#     pip install "agentmesh[autogen]"   # AutoGen adapter
+#
+# `import agentmesh` and the core config classes work with only numpy + pyyaml.
+
+numpy>=1.24.0
+pyyaml>=6.0
+aiohttp>=3.8.0
+openai>=1.0.0
+tqdm>=4.64.0
+coloredlogs>=15.0

@@ -1,0 +1,69 @@
+# AgentMesh example configuration.
+#
+# AgentMesh is a structure-aware runtime for multi-agent LLM systems. It models
+# every interaction as a produce–transfer–consume dataflow and makes each
+# dataflow redundancy- and barrier-free via three mechanisms (DTR, BPP, DES).
+#
+# Copy this file, edit the values, and load it with:
+#     from agentmesh import AgentMeshConfig
+#     config = AgentMeshConfig.from_yaml("agentmesh.yaml")
+#
+# Environment variables (AGENTMESH_*) override these values; see core/config.py.
+
+# ---------------------------------------------------------------------------
+# DTR — Delta Tool Retrieval (the "produce" step; removes REDUNDANCY)
+# Serves the cached base of a tool result, fetches only the semantic delta,
+# then async-refreshes the exact cache entry.
+# ---------------------------------------------------------------------------
+dtr:
+  enabled: true
+  confidence_threshold: 0.8        # τ — activation gate (paper deployment default)
+  retrieval_depth: 10              # n — items per tool query
+  hotspot_k: 3                     # k — top-k delta tokens for reformulation
+  cache_size: 1000                 # max cached entries (LRU eviction)
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  slm_model: Qwen/Qwen2.5-0.5B-Instruct   # small LM for query reformulation
+
+# ---------------------------------------------------------------------------
+# BPP — Branch-Parallel Prefill (the "consume" step; removes BARRIER)
+# Prefills independent worker branches in parallel against the shared
+# supervisor prefix via Branch-Parallel Attention (BPA), then stitches
+# branch-local KVs with late RoPE realignment.
+# ---------------------------------------------------------------------------
+bpp:
+  enabled: true
+  max_parallel_branches: 3         # max concurrent branch prefills
+  num_layers: 32                   # transformer layers
+  num_heads: 32                    # attention heads
+  head_dim: 128                    # dimension per head
+  rope_base: 10000.0               # RoPE base frequency
+
+# ---------------------------------------------------------------------------
+# DES — Dynamic-Equilibrium Streaming (overlaps the stages; drives slack δ→0)
+# Adapts the streaming chunk size θ using OSE finite-difference sensitivities
+# and the Newton step Δθ = −δ/ρ.
+# ---------------------------------------------------------------------------
+des:
+  enabled: true
+  initial_theta: 512               # θ₀ — initial chunk size (tokens)
+  theta_min: 64                    # θ_min
+  theta_max: 4096                  # θ_max
+  damping_factor: 1.0              # smoothing (1.0 = no damping)
+  window_size: 5                   # OSE sliding window
+
+# ---------------------------------------------------------------------------
+# LLM backend
+# ---------------------------------------------------------------------------
+llm:
+  endpoint: http://localhost:8000/v1   # OpenAI-compatible endpoint (e.g. vLLM)
+  model: Qwen/Qwen3-32B
+  timeout: 120
+  max_tokens: 4096
+  temperature: 0.7
+
+# ---------------------------------------------------------------------------
+# General runtime settings
+# ---------------------------------------------------------------------------
+log_level: INFO
+device: cuda
+num_workers: 3
